@@ -12,11 +12,9 @@
 Build an agent from a prompt, give it your tools and knowledge, then put it on a
 phone number, a website, or a bulk campaign.
 
-[Hosted MCP server](https://docs.omnidim.io/docs/mcp) &nbsp;·&nbsp;
 [Documentation](https://docs.omnidim.io/docs) &nbsp;·&nbsp;
 [Quickstart](https://docs.omnidim.io/docs/get-started/quickstart) &nbsp;·&nbsp;
 [API reference](https://docs.omnidim.io/docs/api-reference) &nbsp;·&nbsp;
-[Examples](https://github.com/Omnidim/examples) &nbsp;·&nbsp;
 [Community on Discord](https://discord.gg/kdjzykMTHJ) &nbsp;·&nbsp;
 [Dashboard](https://omnidim.io)
 
