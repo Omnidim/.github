@@ -19,6 +19,10 @@ on:
       submodules:
         type: boolean
         default: false
+      runner:
+        description: "Runner label for the scan job. It needs Docker."
+        type: string
+        required: true
 
 permissions:
   contents: read
@@ -27,7 +31,7 @@ permissions:
 
 jobs:
   scan:
-    runs-on: [self-hosted, omnidim-ci]
+    runs-on: ${{ inputs.runner }}
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -73,7 +77,6 @@ jobs:
             docker image rm "$tag" >/dev/null
             rows "$name" "$out/$name.json"
           done <<< "$IMAGES"
-          docker image prune -f >/dev/null
           count=$(wc -l < "$out/rows.md" | tr -d ' ')
           # Same findings as the last alert means no new email.
           echo "count=$count" >> "$GITHUB_OUTPUT"
@@ -143,3 +146,11 @@ jobs:
               metadata: {threadId: "security-scan-\($repo)", summary: "\($repo) security scan"}}')
             aws sns publish --region "$(cut -d: -f4 <<< "$ALERT_TOPIC")" --topic-arn "$ALERT_TOPIC" --message "$msg" >/dev/null
           fi
+
+      # Runs even after a failed or cancelled scan, so a 5 GB image never stays behind on the runner.
+      - name: Clean up
+        if: always()
+        run: |
+          docker images --filter "reference=trivy-scan/*:$GITHUB_RUN_ID" -q | xargs -r docker image rm -f >/dev/null
+          docker image prune -f >/dev/null
+          docker builder prune -f --max-used-space 15gb >/dev/null
