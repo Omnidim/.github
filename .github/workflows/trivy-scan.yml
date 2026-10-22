@@ -22,7 +22,7 @@ on:
       runner:
         description: "Runner label for the scan job. It needs Docker."
         type: string
-        default: ubuntu-latest
+        required: true
 
 permissions:
   contents: read
