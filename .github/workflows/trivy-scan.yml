@@ -1,0 +1,129 @@
+# Scans the caller's images for fixable HIGH/CRITICAL CVEs. Never fails on findings.
+name: trivy-scan
+
+on:
+  workflow_call:
+    inputs:
+      images:
+        description: "One image per line: name|build context|Dockerfile path|build target (last two optional)"
+        type: string
+        required: true
+      ref:
+        description: "Branch or SHA to scan. Empty means the commit that triggered the run."
+        type: string
+        default: ""
+      submodules:
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: write
+  id-token: write
+
+jobs:
+  scan:
+    runs-on: [self-hosted, omnidim-ci]
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          submodules: ${{ inputs.submodules }}
+
+      - name: Build and scan
+        id: scan
+        env:
+          IMAGES: ${{ inputs.images }}
+          TRIVY_IMAGE: aquasec/trivy:0.68.2
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/trivy"; mkdir -p "$out"
+          cache="$HOME/.cache/trivy"; mkdir -p "$cache"
+          sock="${DOCKER_HOST#unix://}"; [ -S "$sock" ] || sock=/var/run/docker.sock
+          : > "$out/rows.md"
+          while IFS='|' read -r name ctx dockerfile target; do
+            [ -z "${name// }" ] && continue
+            tag="trivy-scan/$name:$GITHUB_RUN_ID"
+            args=(-t "$tag")
+            [ -n "${dockerfile:-}" ] && args+=(-f "$dockerfile")
+            [ -n "${target:-}" ] && args+=(--target "$target")
+            docker build --pull "${args[@]}" "$ctx"
+            docker run --rm -v "$sock:/var/run/docker.sock" -v "$cache:/root/.cache/trivy" -v "$out:/out" \
+              "$TRIVY_IMAGE" image --quiet --scanners vuln --ignore-unfixed --severity HIGH,CRITICAL \
+              --format json -o "/out/$name.json" "$tag"
+            docker image rm "$tag" >/dev/null
+            jq -r --arg img "$name" '.Results[]?.Vulnerabilities[]? |
+              "| \($img) | \(.PkgName) | \(.InstalledVersion) | \(.FixedVersion) | \(.Severity) | \(.VulnerabilityID) |"' \
+              "$out/$name.json" | sort -u >> "$out/rows.md"
+          done <<< "$IMAGES"
+          docker image prune -f >/dev/null
+          count=$(wc -l < "$out/rows.md" | tr -d ' ')
+          # Same findings as the last alert means no new email.
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "hash=$(sort "$out/rows.md" | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Trivy: $count fixable HIGH/CRITICAL findings"
+            if [ "$count" -gt 0 ]; then
+              echo "| Image | Package | Installed | Fixed in | Severity | ID |"
+              echo "|---|---|---|---|---|---|"
+              head -n 200 "$out/rows.md"
+            fi
+          } | tee "$out/report.md" >> "$GITHUB_STEP_SUMMARY"
+          [ "$count" -gt 0 ] && echo "::warning::$count fixable HIGH/CRITICAL findings, see the run summary"
+          true
+
+      - name: Update the security-scan issue
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ALERT_ROLE: ${{ vars.SECURITY_ALERT_ROLE_ARN }}
+          ALERT_TOPIC: ${{ vars.SECURITY_ALERT_TOPIC_ARN }}
+          COUNT: ${{ steps.scan.outputs.count }}
+          HASH: ${{ steps.scan.outputs.hash }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SCANNED: ${{ inputs.ref || github.ref_name }}
+        run: |
+          set -euo pipefail
+          api() { curl -fsS -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "$@"; }
+          repo="$GITHUB_API_URL/repos/$GITHUB_REPOSITORY"
+          api -X POST "$repo/labels" -d '{"name":"security-scan","color":"b60205","description":"Fixable HIGH/CRITICAL findings from the Trivy scan"}' >/dev/null 2>&1 || true
+          issue=$(api "$repo/issues?labels=security-scan&state=open&per_page=1" | jq -r '.[0].number // empty')
+          marker="<!-- trivy-hash:$HASH -->"
+          if [ "$COUNT" -eq 0 ]; then
+            if [ -n "$issue" ]; then
+              api -X POST "$repo/issues/$issue/comments" -d "$(jq -n --arg b "The latest scan of \`$SCANNED\` found no fixable HIGH/CRITICAL findings. Closing. Run: $RUN_URL" '{body:$b}')" >/dev/null
+              api -X PATCH "$repo/issues/$issue" -d '{"state":"closed"}' >/dev/null
+            fi
+            exit 0
+          fi
+          last=""
+          [ -n "$issue" ] && last=$(api "$repo/issues/$issue/comments?per_page=100" | jq -r '[.[].body] | last // ""')
+          [ -n "$issue" ] && [ -z "$last" ] && last=$(api "$repo/issues/$issue" | jq -r '.body')
+          if [[ "$last" == *"$marker"* ]]; then echo "Same findings as the last alert, no new notification."; exit 0; fi
+          body="@Omnidim/approvers The scan of \`$SCANNED\` found $COUNT fixable HIGH/CRITICAL findings. Test any upgrade before merging it.
+
+          Run: $RUN_URL
+
+          $(sed 1d "$RUNNER_TEMP/trivy/report.md")
+
+          $marker"
+          if [ -n "$issue" ]; then
+            api -X POST "$repo/issues/$issue/comments" -d "$(jq -n --arg b "$body" '{body:$b}')" >/dev/null
+          else
+            api -X POST "$repo/issues" -d "$(jq -n --arg b "$body" --arg t "Security scan: fixable vulnerabilities" '{title:$t,body:$b,labels:["security-scan"]}')" >/dev/null
+          fi
+          if [ -n "${ALERT_ROLE:-}" ] && [ -n "${ALERT_TOPIC:-}" ]; then
+            oidc=$(curl -fsS -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | jq -r .value)
+            read -r AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN < <(aws sts assume-role-with-web-identity \
+              --role-arn "$ALERT_ROLE" --role-session-name "trivy-$GITHUB_RUN_ID" --web-identity-token "$oidc" \
+              --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' --output text)
+            export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+            msg=$(jq -n --arg repo "$GITHUB_REPOSITORY" --arg ref "$SCANNED" --arg count "$COUNT" --arg run "$RUN_URL" '{
+              version: "1.0", source: "custom",
+              content: {textType: "client-markdown",
+                title: ":rotating_light: \($repo): \($count) fixable HIGH/CRITICAL findings",
+                description: "Trivy scan of `\($ref)`. Details: <\($run)|run summary>. Test any upgrade before merging it."},
+              metadata: {threadId: "security-scan-\($repo)", summary: "\($repo) security scan"}}')
+            aws sns publish --region "$(cut -d: -f4 <<< "$ALERT_TOPIC")" --topic-arn "$ALERT_TOPIC" --message "$msg" >/dev/null
+          fi
