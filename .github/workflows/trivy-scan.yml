@@ -73,7 +73,6 @@ jobs:
             docker image rm "$tag" >/dev/null
             rows "$name" "$out/$name.json"
           done <<< "$IMAGES"
-          docker image prune -f >/dev/null
           count=$(wc -l < "$out/rows.md" | tr -d ' ')
           # Same findings as the last alert means no new email.
           echo "count=$count" >> "$GITHUB_OUTPUT"
@@ -143,3 +142,11 @@ jobs:
               metadata: {threadId: "security-scan-\($repo)", summary: "\($repo) security scan"}}')
             aws sns publish --region "$(cut -d: -f4 <<< "$ALERT_TOPIC")" --topic-arn "$ALERT_TOPIC" --message "$msg" >/dev/null
           fi
+
+      # Runs even after a failed or cancelled scan, so a 5 GB image never stays behind on the runner.
+      - name: Clean up
+        if: always()
+        run: |
+          docker images --filter "reference=trivy-scan/*:$GITHUB_RUN_ID" -q | xargs -r docker image rm -f >/dev/null
+          docker image prune -f >/dev/null
+          docker builder prune -f --max-used-space 15gb >/dev/null
