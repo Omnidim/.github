@@ -1,4 +1,4 @@
-# Scans the caller's images for fixable HIGH/CRITICAL CVEs. Never fails on findings.
+# Scans the caller's images and lockfiles for fixable HIGH/CRITICAL CVEs. Never fails on findings.
 name: trivy-scan
 
 on:
@@ -7,7 +7,11 @@ on:
       images:
         description: "One image per line: name|build context|Dockerfile path|build target (last two optional)"
         type: string
-        required: true
+        default: ""
+      lockfiles:
+        description: "One path per line (a lockfile or a folder holding one), scanned without a build"
+        type: string
+        default: ""
       ref:
         description: "Branch or SHA to scan. Empty means the commit that triggered the run."
         type: string
@@ -35,6 +39,7 @@ jobs:
         id: scan
         env:
           IMAGES: ${{ inputs.images }}
+          LOCKFILES: ${{ inputs.lockfiles }}
           TRIVY_IMAGE: aquasec/trivy:0.68.2
         run: |
           set -euo pipefail
@@ -42,6 +47,21 @@ jobs:
           cache="$HOME/.cache/trivy"; mkdir -p "$cache"
           sock="${DOCKER_HOST#unix://}"; [ -S "$sock" ] || sock=/var/run/docker.sock
           : > "$out/rows.md"
+          trivy() { docker run --rm -v "$sock:/var/run/docker.sock" -v "$cache:/root/.cache/trivy" -v "$out:/out" \
+            -v "$GITHUB_WORKSPACE:/src:ro" "$TRIVY_IMAGE" "$@" --quiet --scanners vuln --ignore-unfixed \
+            --severity HIGH,CRITICAL --format json; }
+          rows() {
+            jq -r --arg what "$1" '.Results[]?.Vulnerabilities[]? |
+              "| \($what) | \(.PkgName) | \(.InstalledVersion) | \(.FixedVersion) | \(.Severity) | \(.VulnerabilityID) |"' \
+              "$2" | sort -u >> "$out/rows.md"
+          }
+          n=0
+          while read -r path; do
+            [ -z "${path// }" ] && continue
+            n=$((n + 1))
+            trivy fs -o "/out/lockfile-$n.json" "/src/$path"
+            rows "$path" "$out/lockfile-$n.json"
+          done <<< "$LOCKFILES"
           while IFS='|' read -r name ctx dockerfile target; do
             [ -z "${name// }" ] && continue
             tag="trivy-scan/$name:$GITHUB_RUN_ID"
@@ -49,13 +69,9 @@ jobs:
             [ -n "${dockerfile:-}" ] && args+=(-f "$dockerfile")
             [ -n "${target:-}" ] && args+=(--target "$target")
             docker build --pull "${args[@]}" "$ctx"
-            docker run --rm -v "$sock:/var/run/docker.sock" -v "$cache:/root/.cache/trivy" -v "$out:/out" \
-              "$TRIVY_IMAGE" image --quiet --scanners vuln --ignore-unfixed --severity HIGH,CRITICAL \
-              --format json -o "/out/$name.json" "$tag"
+            trivy image -o "/out/$name.json" "$tag"
             docker image rm "$tag" >/dev/null
-            jq -r --arg img "$name" '.Results[]?.Vulnerabilities[]? |
-              "| \($img) | \(.PkgName) | \(.InstalledVersion) | \(.FixedVersion) | \(.Severity) | \(.VulnerabilityID) |"' \
-              "$out/$name.json" | sort -u >> "$out/rows.md"
+            rows "$name" "$out/$name.json"
           done <<< "$IMAGES"
           docker image prune -f >/dev/null
           count=$(wc -l < "$out/rows.md" | tr -d ' ')
@@ -65,7 +81,7 @@ jobs:
           {
             echo "## Trivy: $count fixable HIGH/CRITICAL findings"
             if [ "$count" -gt 0 ]; then
-              echo "| Image | Package | Installed | Fixed in | Severity | ID |"
+              echo "| Image or lockfile | Package | Installed | Fixed in | Severity | ID |"
               echo "|---|---|---|---|---|---|"
               head -n 200 "$out/rows.md"
             fi
