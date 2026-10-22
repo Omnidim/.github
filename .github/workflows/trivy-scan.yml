@@ -49,7 +49,7 @@ jobs:
           set -euo pipefail
           out="$RUNNER_TEMP/trivy"; mkdir -p "$out"
           cache="$HOME/.cache/trivy"; mkdir -p "$cache"
-          sock="${DOCKER_HOST#unix://}"; [ -S "$sock" ] || sock=/var/run/docker.sock
+          sock="${DOCKER_HOST:-}"; sock="${sock#unix://}"; [ -S "$sock" ] || sock=/var/run/docker.sock
           : > "$out/rows.md"
           trivy() { docker run --rm -v "$sock:/var/run/docker.sock" -v "$cache:/root/.cache/trivy" -v "$out:/out" \
             -v "$GITHUB_WORKSPACE:/src:ro" "$TRIVY_IMAGE" "$@" --quiet --scanners vuln --ignore-unfixed \
