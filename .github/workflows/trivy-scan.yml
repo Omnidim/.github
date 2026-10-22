@@ -51,8 +51,10 @@ jobs:
           cache="$HOME/.cache/trivy"; mkdir -p "$cache"
           sock="${DOCKER_HOST:-}"; sock="${sock#unix://}"; [ -S "$sock" ] || sock=/var/run/docker.sock
           : > "$out/rows.md"
+          # A repo-root .trivyignore lists findings reviewed by hand as not applying, each with its reason.
+          ignore=(); [ -f "$GITHUB_WORKSPACE/.trivyignore" ] && ignore=(--ignorefile /src/.trivyignore)
           trivy() { docker run --rm -v "$sock:/var/run/docker.sock" -v "$cache:/root/.cache/trivy" -v "$out:/out" \
-            -v "$GITHUB_WORKSPACE:/src:ro" "$TRIVY_IMAGE" "$@" --quiet --scanners vuln --ignore-unfixed \
+            -v "$GITHUB_WORKSPACE:/src:ro" "$TRIVY_IMAGE" "$@" ${ignore[@]+"${ignore[@]}"} --quiet --scanners vuln --ignore-unfixed \
             --severity HIGH,CRITICAL --format json; }
           rows() {
             jq -r --arg what "$1" '.Results[]?.Vulnerabilities[]? |
