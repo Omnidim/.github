@@ -1,5 +1,5 @@
 name: review-risk
-description: Labels a pull request "risk: low", "risk: standard" or "risk: high" from its paths, its size and the OpenCode review verdict.
+description: "Labels a pull request low, standard or high risk from its paths, its size and the OpenCode review verdict."
 # Run it as a step after aloki-alok/opencode-review in the same job, so the verdict for the head commit
 # is already posted. The job needs contents read, and pull-requests and issues write.
 # The risky paths come from .github/review-risk-paths on the PR's base branch: one fnmatch pattern a line.
