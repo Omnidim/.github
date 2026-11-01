@@ -68,6 +68,13 @@ jobs:
             trivy fs -o "/out/lockfile-$n.json" "/src/$path"
             rows "$path" "$out/lockfile-$n.json"
           done <<< "$LOCKFILES"
+          # A PR scans the dependency files in its checkout instead of building images (3 to 6 min each).
+          # Pushes and the nightly run still build the images, which also covers OS packages.
+          if [ "$GITHUB_EVENT_NAME" = pull_request ] && [ -n "${IMAGES//[[:space:]]/}" ]; then
+            trivy fs -o /out/checkout.json /src
+            rows "checkout" "$out/checkout.json"
+            IMAGES=""
+          fi
           while IFS='|' read -r name ctx dockerfile target; do
             [ -z "${name// }" ] && continue
             tag="trivy-scan/$name:$GITHUB_RUN_ID"
