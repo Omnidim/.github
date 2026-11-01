@@ -86,6 +86,8 @@ class Tiers(unittest.TestCase):
         self.assertEqual(decide(fs, RULES, 'NONE', 'dependabot[bot]', 'clean', 400, major)[0], 'standard')
         self.assertEqual(decide(fs, RULES, 'NONE', 'dependabot[bot]', 'clean', 400, minor)[0], 'low')
         self.assertEqual(decide(fs, RULES, 'NONE', 'dependabot[bot]', 'clean', 400, 'Bump x from 1.2 to 1.3')[0], 'low')
+        bare = 'Bump actions/checkout from 3 to 4'
+        self.assertEqual(decide(fs, RULES, 'NONE', 'dependabot[bot]', 'clean', 400, bare)[0], 'standard')
 
     def test_reasons_name_the_file(self):
         reasons = decide(files(('app/billing/x.py', 1)), RULES, 'MEMBER', 'k', 'clean', 400)[1]

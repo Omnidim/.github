@@ -33,7 +33,7 @@ TEST_PATTERNS = ('*/tests/*', '*/__tests__/*', '*.test.*', '*.spec.*')  # with _
 AI_AUTHOR = 'github-actions[bot]'  # the review posts with the job token; anyone else could fake it
 MAX_FILES = 3000  # the PR files API stops here
 # Dependabot titles: 'Bump x from 3.6.0 to 4.4.0'. A new major version may break callers.
-BUMP = re.compile(r'\bfrom v?(\d+)\.\S* to v?(\d+)\.')
+BUMP = re.compile(r'\bfrom v?(\d+)(?:\.\S*)? to v?(\d+)\b')
 
 
 def parse_rules(text):
@@ -175,8 +175,6 @@ def main(env):
         int(env.get('RISK_MAX_LINES') or 400),
         pr['title'],
     )
-    set_label(gh, n, tier)
-
     summary = [f'## Review tier: {tier}', '', f'AI review: {ai}.', '']
     summary += [f'- {r}' for r in reasons] or ['- nothing raised it']
     print('\n'.join(summary))
@@ -186,6 +184,7 @@ def main(env):
     if env.get('GITHUB_OUTPUT'):
         with open(env['GITHUB_OUTPUT'], 'a') as fh:
             fh.write(f'tier={tier}\n')
+    set_label(gh, n, tier)  # last, so the crash fallback below never overwrites a label set here
 
 
 if __name__ == '__main__':
