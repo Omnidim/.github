@@ -27,7 +27,10 @@ GENERATED = (
     'package-lock.json npm-shrinkwrap.json yarn.lock pnpm-lock.yaml bun.lock bun.lockb poetry.lock '
     'uv.lock Pipfile.lock Cargo.lock go.sum Gemfile.lock composer.lock *.po *.pot *.min.js *.min.css *.map'
 ).split()
-TEST_PATTERNS = ('*/tests/*', '*/__tests__/*', '*/test_*.py', '*.test.*', '*.spec.*')  # with _match's leading /
+# Test folders only: a module named test_*.py can be a real route.
+TEST_PATTERNS = ('*/tests/*', '*/__tests__/*', '*.test.*', '*.spec.*')  # with _match's leading /
+AI_AUTHOR = 'github-actions[bot]'  # the review posts with the job token; anyone else could fake it
+MAX_FILES = 3000  # the PR files API stops here
 
 
 def parse_rules(text):
@@ -51,25 +54,27 @@ def _code(path):
     return path.rsplit('.', 1)[-1] in CODE and not _generated(path)
 
 
-def ai_verdict(comment_bodies, head_sha, files):
-    """clean, findings, missing (no finished review of this commit) or not_needed (no code changed)."""
+def ai_verdict(comments, head_sha, files):
+    """clean, findings, missing (no finished review of this commit) or not_needed (no code changed).
+    `comments` is (author login, body) pairs, oldest first."""
     if not any(_code(f['path']) for f in files):
         return 'not_needed'
-    for body in reversed(comment_bodies):
-        if AI_MARKER not in body:
+    for login, body in reversed(comments):
+        if login != AI_AUTHOR or AI_MARKER not in body:
             continue
         if f'review of {head_sha[:9]}' not in body:
             return 'missing'
-        if 'Nothing blocking found' in body:
+        status = body.split(AI_MARKER, 1)[1].strip().split('\n', 1)[0]  # the line under the marker
+        if status.startswith('Nothing blocking found'):
             return 'clean'
-        if 'Changes needed' in body:
+        if status.startswith('Changes needed'):
             return 'findings'
         return 'missing'
     return 'missing'
 
 
 def decide(files, rules, author_assoc, author_login, ai, max_lines):
-    """Return (tier, reasons)."""
+    """Return (tier, reasons). `rules` is None when the base branch has no rules file."""
     level, reasons = 0, []
 
     def raise_to(t, why):
@@ -79,10 +84,14 @@ def decide(files, rules, author_assoc, author_login, ai, max_lines):
 
     if author_assoc not in MEMBERS and author_login not in TRUSTED_BOTS:
         raise_to('high', f'author {author_login} is outside the team')
+    if len(files) >= MAX_FILES:
+        raise_to('high', f'{MAX_FILES} or more files, so the list may be cut off')
+    if rules is None:
+        raise_to('standard', f'the base branch has no {RULES_FILE}')
     for f in files:
-        p = f['path']
-        if p == RULES_FILE or (_any(p, rules) and not _any(p, TEST_PATTERNS)):
-            raise_to('high', f'changes `{p}`')
+        for p in filter(None, (f['path'], f.get('previous'))):  # a rename out of a risky folder counts
+            if p == RULES_FILE or (_any(p, rules or []) and not _any(p, TEST_PATTERNS)):
+                raise_to('high', f'changes `{p}`')
     lines = sum(f['changes'] for f in files if not _generated(f['path']))
     if lines > max_lines:
         raise_to('standard', f'{lines} changed lines, over {max_lines}')
@@ -118,6 +127,18 @@ class GitHub:
             page += 1
 
 
+def set_label(gh, n, tier):
+    """Leave exactly one risk label. Reads the live labels: the event's copy is stale on a re-run."""
+    for lb in gh.call(f'/issues/{n}/labels'):
+        if lb['name'].startswith('risk: ') and lb['name'] != f'risk: {tier}':
+            try:
+                gh.call(f'/issues/{n}/labels/{urllib.parse.quote(lb["name"])}', method='DELETE')
+            except urllib.error.HTTPError as e:
+                if e.code != 404:  # already gone
+                    raise
+    gh.call(f'/issues/{n}/labels', method='POST', data={'labels': [f'risk: {tier}']})
+
+
 def main(env):
     event = json.load(open(env['GITHUB_EVENT_PATH']))
     pr = event.get('pull_request')
@@ -126,15 +147,18 @@ def main(env):
         return
     gh = GitHub(env.get('GITHUB_API_URL', 'https://api.github.com'), env['GITHUB_REPOSITORY'], env['GH_TOKEN'])
     n, head = pr['number'], pr['head']['sha']
-    files = [{'path': f['filename'], 'changes': f['changes']} for f in gh.pages(f'/pulls/{n}/files')]
+    files = [
+        {'path': f['filename'], 'previous': f.get('previous_filename'), 'changes': f['changes']}
+        for f in gh.pages(f'/pulls/{n}/files')
+    ]
     try:  # from the base branch, so a PR cannot loosen its own rules
         raw = gh.call(f'/contents/{RULES_FILE}?ref={pr["base"]["sha"]}', accept='application/vnd.github.raw')
         rules = parse_rules(raw.decode())
     except urllib.error.HTTPError as e:
         if e.code != 404:
             raise
-        rules = []
-    comments = [c['body'] or '' for c in gh.pages(f'/issues/{n}/comments')]
+        rules = None
+    comments = [(c['user']['login'], c['body'] or '') for c in gh.pages(f'/issues/{n}/comments')]
     ai = ai_verdict(comments, head, files)
     tier, reasons = decide(
         files,
@@ -144,11 +168,7 @@ def main(env):
         ai,
         int(env.get('RISK_MAX_LINES') or 400),
     )
-    label = f'risk: {tier}'
-    for t in TIERS:
-        if f'risk: {t}' != label and any(lb['name'] == f'risk: {t}' for lb in pr.get('labels', [])):
-            gh.call(f'/issues/{n}/labels/{urllib.parse.quote(f"risk: {t}")}', method='DELETE')
-    gh.call(f'/issues/{n}/labels', method='POST', data={'labels': [label]})
+    set_label(gh, n, tier)
 
     summary = [f'## Review tier: {tier}', '', f'AI review: {ai}.', '']
     summary += [f'- {r}' for r in reasons] or ['- nothing raised it']
@@ -162,4 +182,19 @@ def main(env):
 
 
 if __name__ == '__main__':
-    main(os.environ)
+    try:
+        main(os.environ)
+    except Exception:
+        # Fail closed: a label left from an older commit must not stand for this one.
+        event = json.load(open(os.environ['GITHUB_EVENT_PATH']))
+        if event.get('pull_request'):
+            gh = GitHub(
+                os.environ.get('GITHUB_API_URL', 'https://api.github.com'),
+                os.environ['GITHUB_REPOSITORY'],
+                os.environ['GH_TOKEN'],
+            )
+            try:
+                set_label(gh, event['pull_request']['number'], 'standard')
+            except Exception as e:  # noqa: BLE001 - e.g. a read-only token; the error below says enough
+                print(f'Could not set the fallback label: {e}')
+        raise
