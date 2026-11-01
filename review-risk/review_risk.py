@@ -12,6 +12,7 @@ from __future__ import annotations
 import fnmatch
 import json
 import os
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -31,6 +32,8 @@ GENERATED = (
 TEST_PATTERNS = ('*/tests/*', '*/__tests__/*', '*.test.*', '*.spec.*')  # with _match's leading /
 AI_AUTHOR = 'github-actions[bot]'  # the review posts with the job token; anyone else could fake it
 MAX_FILES = 3000  # the PR files API stops here
+# Dependabot titles: 'Bump x from 3.6.0 to 4.4.0'. A new major version may break callers.
+BUMP = re.compile(r'\bfrom v?(\d+)\.\S* to v?(\d+)\.')
 
 
 def parse_rules(text):
@@ -73,7 +76,7 @@ def ai_verdict(comments, head_sha, files):
     return 'missing'
 
 
-def decide(files, rules, author_assoc, author_login, ai, max_lines):
+def decide(files, rules, author_assoc, author_login, ai, max_lines, title=''):
     """Return (tier, reasons). `rules` is None when the base branch has no rules file."""
     level, reasons = 0, []
 
@@ -92,6 +95,9 @@ def decide(files, rules, author_assoc, author_login, ai, max_lines):
         for p in filter(None, (f['path'], f.get('previous'))):  # a rename out of a risky folder counts
             if p == RULES_FILE or (_any(p, rules or []) and not _any(p, TEST_PATTERNS)):
                 raise_to('high', f'changes `{p}`')
+    bump = BUMP.search(title)
+    if bump and bump[1] != bump[2]:
+        raise_to('standard', f'major version upgrade, {bump[1]} to {bump[2]}')
     lines = sum(f['changes'] for f in files if not _generated(f['path']))
     if lines > max_lines:
         raise_to('standard', f'{lines} changed lines, over {max_lines}')
@@ -167,6 +173,7 @@ def main(env):
         pr['user']['login'],
         ai,
         int(env.get('RISK_MAX_LINES') or 400),
+        pr['title'],
     )
     set_label(gh, n, tier)
 

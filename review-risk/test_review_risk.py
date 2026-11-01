@@ -79,6 +79,14 @@ class Tiers(unittest.TestCase):
     def test_dependabot_is_treated_as_a_member(self):
         self.assertEqual(tier(files(('package.json', 2)), assoc='NONE', login='dependabot[bot]'), 'low')
 
+    def test_a_major_version_bump_is_standard(self):
+        fs = files(('package.json', 2))
+        major = 'Bump date-fns from 3.6.0 to 4.4.0'
+        minor = 'Bump the minor-and-patch group across 1 directory with 5 updates'
+        self.assertEqual(decide(fs, RULES, 'NONE', 'dependabot[bot]', 'clean', 400, major)[0], 'standard')
+        self.assertEqual(decide(fs, RULES, 'NONE', 'dependabot[bot]', 'clean', 400, minor)[0], 'low')
+        self.assertEqual(decide(fs, RULES, 'NONE', 'dependabot[bot]', 'clean', 400, 'Bump x from 1.2 to 1.3')[0], 'low')
+
     def test_reasons_name_the_file(self):
         reasons = decide(files(('app/billing/x.py', 1)), RULES, 'MEMBER', 'k', 'clean', 400)[1]
         self.assertTrue(any('app/billing/x.py' in r for r in reasons))
