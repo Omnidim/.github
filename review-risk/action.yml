@@ -1,0 +1,25 @@
+name: review-risk
+description: "Labels a pull request low, standard or high risk from its paths, its size and the OpenCode review verdict."
+# Run it as a step after aloki-alok/opencode-review in the same job, so the verdict for the head commit
+# is already posted. The job needs contents read, and pull-requests and issues write.
+# The risky paths come from .github/review-risk-paths on the PR's base branch: one fnmatch pattern a line.
+inputs:
+  github-token:
+    description: Token that reads the PR and sets its label.
+    required: true
+  max-lines:
+    description: More changed lines than this, lockfiles aside, make a PR standard.
+    default: '400'
+outputs:
+  tier:
+    description: low, standard or high
+    value: ${{ steps.tier.outputs.tier }}
+runs:
+  using: composite
+  steps:
+    - id: tier
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        RISK_MAX_LINES: ${{ inputs.max-lines }}
+      run: python3 "$GITHUB_ACTION_PATH/review_risk.py"
