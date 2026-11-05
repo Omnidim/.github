@@ -50,6 +50,11 @@ class Template(unittest.TestCase):
 
 
 class Problems(unittest.TestCase):
+    def test_hash_heading_inside_a_code_fence_is_code(self):
+        body = GOOD.replace('call ends -> post_call', '## step one\ncall ends -> post_call')
+        self.assertEqual(problems(body), [])
+        self.assertEqual(tuple(parse(body)[0]), HEADINGS)
+
     def test_good_body_has_none(self):
         self.assertEqual(problems(GOOD), [])
 
@@ -139,6 +144,7 @@ class ReleaseDraftFlow(unittest.TestCase):
             ],
             ('GET', '/repos/o/r/issues/7/comments?per_page=100'): [],
             ('POST', '/changelog'): {'id': 1200},
+            ('POST', '/repos/o/r/issues/7/comments'): {'url': f'{base}/repos/o/r/issues/comments/55'},
         }
         event = tempfile.NamedTemporaryFile('w', suffix='.json', delete=False)
         json.dump({}, event)
@@ -166,8 +172,41 @@ class ReleaseDraftFlow(unittest.TestCase):
         main(self.env)
         [post] = self.posts('/changelog')
         self.assertIs(post['is_published'], False)
-        [comment] = self.posts('/repos/o/r/issues/7/comments')
-        self.assertIn('1200', comment['body'])
+        [first] = self.posts('/repos/o/r/issues/7/comments')
+        self.assertIn('<!-- release-draft -->', first['body'])  # the marker lands before the POST
+        [(_, final)] = [(p, b) for m, p, b in FakeServer.seen if m == 'PATCH']
+        self.assertIn('1200', final['body'])
+
+    def test_warning_comment_appears_then_goes_when_fixed(self):
+        self.env['GITHUB_EVENT_NAME'] = 'pull_request'
+        pr = {'number': 7, 'user': {'login': 'dev'}, 'body': GOOD.replace('## Proof', '## Evidence')}
+        with open(self.env['GITHUB_EVENT_PATH'], 'w') as fh:
+            json.dump({'pull_request': pr}, fh)
+        main(self.env)
+        [warn] = self.posts('/repos/o/r/issues/7/comments')
+        self.assertIn('Proof', warn['body'])
+        FakeServer.routes[('GET', '/repos/o/r/issues/7/comments?per_page=100')] = [
+            {'user': {'login': 'someone'}, 'body': '<!-- pr-body-check -->', 'url': f'{self.env["GITHUB_API_URL"]}/x'},
+            {'user': {'login': 'github-actions[bot]'}, 'body': warn['body'], 'url': f'{self.env["GITHUB_API_URL"]}/y'},
+        ]
+        pr['body'] = GOOD
+        with open(self.env['GITHUB_EVENT_PATH'], 'w') as fh:
+            json.dump({'pull_request': pr}, fh)
+        main(self.env)
+        deletes = [p for method, p, _ in FakeServer.seen if method == 'DELETE']
+        self.assertEqual(deletes, ['/y'])  # only the bot's own comment
+
+    def test_push_whose_sha_no_pr_merged_as_posts_nothing(self):
+        FakeServer.routes[('GET', '/repos/o/r/commits/abc/pulls')][0]['merge_commit_sha'] = 'other'
+        main(self.env)
+        self.assertEqual(self.posts('/changelog'), [])
+
+    def test_failed_post_leaves_no_marker_so_a_rerun_retries(self):
+        self.env['CHANGELOG_URL'] = 'http://127.0.0.1:1/closed'
+        with self.assertRaises(OSError):
+            main(self.env)
+        deletes = [p for method, p, _ in FakeServer.seen if method == 'DELETE']
+        self.assertEqual(deletes, ['/repos/o/r/issues/comments/55'])
 
     def test_rerun_after_a_draft_posts_nothing(self):
         FakeServer.routes[('GET', '/repos/o/r/issues/7/comments?per_page=100')] = [

@@ -29,9 +29,11 @@ NOT_PROSE = re.compile(r'```.*?```|<details>.*?</details>|<!--.*?-->|^#+ [^\n]*'
 
 def parse(body):
     """Return ({heading: text without comments}, {'release': str | None, 'deploy': [str]})."""
-    sections, current = {}, None
+    sections, current, fenced = {}, None, False
     for line in (body or '').splitlines():
-        if line.startswith('## '):
+        if line.lstrip().startswith('```'):
+            fenced = not fenced
+        if line.startswith('## ') and not fenced:
             current = line[3:].strip()
             sections[current] = []
         elif current:
@@ -127,11 +129,11 @@ def check(env, api, token, pr):
 
 def release_draft(env, api, token):
     sha = env['GITHUB_SHA']
-    prs = [p for p in call(f'{api}/commits/{sha}/pulls', token) if p.get('merged_at')]
-    if not prs:
-        print(f'{sha[:9]} came from no merged PR, so no release draft.')
+    prs = call(f'{api}/commits/{sha}/pulls', token)
+    pr = next((p for p in prs if p.get('merged_at') and p.get('merge_commit_sha') == sha), None)
+    if not pr:
+        print(f'{sha[:9]} is no PR merge, so no release draft.')
         return
-    pr = next((p for p in prs if p.get('merge_commit_sha') == sha), prs[0])
     post = draft(pr.get('body'), env.get('CHANGELOG_TAGS') or 'Platform')
     if not post:
         print(f'PR #{pr["number"]} is not a release, so no draft.')
@@ -139,13 +141,23 @@ def release_draft(env, api, token):
     if bot_comment(api, token, pr['number'], DRAFT_MARKER):  # a re-run must not post it twice
         print(f'PR #{pr["number"]} already has a release draft.')
         return
-    created = call(env['CHANGELOG_URL'], env['CHANGELOG_KEY'], method='POST', data=post)
-    post_id = (created or {}).get('id', '?')
-    text = (
-        f'{DRAFT_MARKER}\nRelease draft {post_id} created, unpublished: "{post["title"]}". '
-        'It goes live on the changelog when someone publishes it after the deploy.'
+    # Marker first, so a re-run after a lost comment never posts twice; removed again if the POST fails.
+    claim = call(
+        f'{api}/issues/{pr["number"]}/comments',
+        token,
+        method='POST',
+        data={'body': f'{DRAFT_MARKER}\nCreating the release draft.'},
     )
-    call(f'{api}/issues/{pr["number"]}/comments', token, method='POST', data={'body': text})
+    try:
+        created = call(env['CHANGELOG_URL'], env['CHANGELOG_KEY'], method='POST', data=post)
+    except Exception:
+        call(claim['url'], token, method='DELETE')
+        raise
+    text = (
+        f'{DRAFT_MARKER}\nRelease draft {(created or {}).get("id", "?")} created, unpublished: '
+        f'"{post["title"]}". It goes live on the changelog when someone publishes it after the deploy.'
+    )
+    call(claim['url'], token, method='PATCH', data={'body': text})
     print(text)
 
 
