@@ -19,5 +19,5 @@ Leave out commit lists, test counts CI already shows, and how you worked.
 ## Deploy and rollback
 <!-- Modules to upgrade, settings, order across repos, how to roll back. -->
 
-<!-- Pick one. feature or fix drafts a changelog entry when the PR merges. -->
+<!-- Pick one. feature or fix publishes line 1 and 2 of the first section to the changelog when the PR merges. -->
 <!-- release: feature | fix | none -->

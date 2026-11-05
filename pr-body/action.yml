@@ -1,7 +1,7 @@
 name: pr-body
-description: "Warns when a PR body misses the team format, and turns a merged release PR into an unpublished changelog draft."
+description: "Warns when a PR body misses the team format, and publishes a merged release PR to the changelog."
 # On pull_request it posts one warning comment and never fails, so it never blocks a merge.
-# On push to the release branch it creates the draft. Run that job in an environment that only the
+# On push to the release branch it publishes the post. Run that job in an environment that only the
 # release branch may use, so a PR's own workflow edit cannot read the changelog key.
 # The job needs contents read, and pull-requests and issues write.
 inputs:
@@ -12,10 +12,10 @@ inputs:
     description: API key of the changelog writer. Only the push job needs it.
     default: ''
   changelog-url:
-    description: Where to POST the draft. Only the push job needs it.
+    description: Where to POST the changelog post. Only the push job needs it.
     default: ''
   tags:
-    description: Tags for the draft, comma separated. The publisher can edit them.
+    description: Tags for the post, comma separated.
     default: Platform
 runs:
   using: composite
