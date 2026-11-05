@@ -1,0 +1,29 @@
+name: pr-body
+description: "Warns when a PR body misses the team format, and turns a merged release PR into an unpublished changelog draft."
+# On pull_request it posts one warning comment and never fails, so it never blocks a merge.
+# On push to the release branch it creates the draft. Run that job in an environment that only the
+# release branch may use, so a PR's own workflow edit cannot read the changelog key.
+# The job needs contents read, and pull-requests and issues write.
+inputs:
+  github-token:
+    description: Token that reads the PR and writes its comments.
+    required: true
+  changelog-key:
+    description: API key of the changelog writer. Only the push job needs it.
+    default: ''
+  changelog-url:
+    description: Where to POST the draft. Only the push job needs it.
+    default: ''
+  tags:
+    description: Tags for the draft, comma separated. The publisher can edit them.
+    default: Platform
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        CHANGELOG_KEY: ${{ inputs.changelog-key }}
+        CHANGELOG_URL: ${{ inputs.changelog-url }}
+        CHANGELOG_TAGS: ${{ inputs.tags }}
+      run: python3 "$GITHUB_ACTION_PATH/pr_body.py"

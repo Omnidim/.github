@@ -1,0 +1,46 @@
+name: Bug
+description: Something a user sees working wrong.
+labels: [bug]
+body:
+  - type: textarea
+    id: seen
+    attributes:
+      label: What the user saw
+      description: The exact screen, message or call behaviour.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What they expected
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1.
+        2.
+    validations:
+      required: true
+  - type: input
+    id: call
+    attributes:
+      label: Call id
+  - type: input
+    id: agent
+    attributes:
+      label: Agent id
+  - type: dropdown
+    id: account
+    attributes:
+      label: Account type
+      options:
+        - Direct customer
+        - Reseller
+        - White-label client
+        - Reseller child
+        - Not sure
+    validations:
+      required: true

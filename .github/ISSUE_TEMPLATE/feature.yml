@@ -1,0 +1,31 @@
+name: Feature
+description: Something new a user should be able to do.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What the user cannot do today. It should stay true under a different solution.
+    validations:
+      required: true
+  - type: textarea
+    id: who
+    attributes:
+      label: Who it is for
+      description: Which customers ask for it, and how often.
+    validations:
+      required: true
+  - type: checkboxes
+    id: accounts
+    attributes:
+      label: Account types that get it
+      options:
+        - label: Direct customer
+        - label: Reseller
+        - label: White-label client
+        - label: Reseller child
+  - type: textarea
+    id: out
+    attributes:
+      label: Out of scope
