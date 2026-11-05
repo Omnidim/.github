@@ -1,9 +1,9 @@
-"""Check a pull request body against the team format, and turn a merged one into a release draft.
+"""Check a pull request body against the team format, and publish a merged release PR to the changelog.
 
 pull_request event: post one comment listing what the body misses, and delete it once the body is fixed.
 It never fails the check, so it never blocks a merge.
 push event (a merge into the release branch): if the PR says `release: feature` or `release: fix`,
-create an UNPUBLISHED changelog post. A merge is not a deploy, so a person publishes it after the deploy.
+publish a changelog post. Ryu chose publish on merge (2026-11-05), so an omni-odoo entry can lead its deploy.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ HEADINGS = ('What changes for users', 'Who gets it', 'How it works', 'Proof', 'D
 RELEASES = {'feature': 'Feature', 'fix': 'Bug Fix', 'none': None}
 MAX_WORDS = 150
 CHECK_MARKER = '<!-- pr-body-check -->'
-DRAFT_MARKER = '<!-- release-draft -->'
+POST_MARKER = '<!-- release-post -->'
 BOT = 'github-actions[bot]'  # comments by anyone else could fake a marker
 SKIP_AUTHORS = ('dependabot[bot]',)
 
@@ -64,7 +64,7 @@ def problems(body):
     return out
 
 
-def draft(body, tags):
+def release_post(body, tags):
     """The changelog post payload, or None when the PR is not a release."""
     sections, markers = parse(body)
     category = RELEASES.get(markers['release'] or 'none')
@@ -77,7 +77,7 @@ def draft(body, tags):
         'category': category,
         'tags': tags,
         'content': ''.join(f'<p>{html.escape(ln)}</p>' for ln in lines[1:] or lines),
-        'is_published': False,
+        'is_published': True,
     }
 
 
@@ -127,26 +127,26 @@ def check(env, api, token, pr):
         call(f'{api}/issues/{pr["number"]}/comments', token, method='POST', data={'body': text})
 
 
-def release_draft(env, api, token):
+def publish(env, api, token):
     sha = env['GITHUB_SHA']
     prs = call(f'{api}/commits/{sha}/pulls', token)
     pr = next((p for p in prs if p.get('merged_at') and p.get('merge_commit_sha') == sha), None)
     if not pr:
-        print(f'{sha[:9]} is no PR merge, so no release draft.')
+        print(f'{sha[:9]} is no PR merge, so no changelog post.')
         return
-    post = draft(pr.get('body'), env.get('CHANGELOG_TAGS') or 'Platform')
+    post = release_post(pr.get('body'), env.get('CHANGELOG_TAGS') or 'Platform')
     if not post:
-        print(f'PR #{pr["number"]} is not a release, so no draft.')
+        print(f'PR #{pr["number"]} is not a release, so no changelog post.')
         return
-    if bot_comment(api, token, pr['number'], DRAFT_MARKER):  # a re-run must not post it twice
-        print(f'PR #{pr["number"]} already has a release draft.')
+    if bot_comment(api, token, pr['number'], POST_MARKER):  # a re-run must not post it twice
+        print(f'PR #{pr["number"]} is already on the changelog.')
         return
     # Marker first, so a re-run after a lost comment never posts twice; removed again if the POST fails.
     claim = call(
         f'{api}/issues/{pr["number"]}/comments',
         token,
         method='POST',
-        data={'body': f'{DRAFT_MARKER}\nCreating the release draft.'},
+        data={'body': f'{POST_MARKER}\nPublishing to the changelog.'},
     )
     try:
         created = call(env['CHANGELOG_URL'], env['CHANGELOG_KEY'], method='POST', data=post)
@@ -154,8 +154,7 @@ def release_draft(env, api, token):
         call(claim['url'], token, method='DELETE')
         raise
     text = (
-        f'{DRAFT_MARKER}\nRelease draft {(created or {}).get("id", "?")} created, unpublished: '
-        f'"{post["title"]}". It goes live on the changelog when someone publishes it after the deploy.'
+        f'{POST_MARKER}\nPublished to the changelog as post {(created or {}).get("id", "?")}: "{post["title"]}".'
     )
     call(claim['url'], token, method='PATCH', data={'body': text})
     print(text)
@@ -166,7 +165,7 @@ def main(env):
     token = env['GH_TOKEN']
     event = json.load(open(env['GITHUB_EVENT_PATH']))
     if env['GITHUB_EVENT_NAME'] == 'push':
-        release_draft(env, api, token)
+        publish(env, api, token)
     elif event.get('pull_request'):
         try:
             check(env, api, token, event['pull_request'])

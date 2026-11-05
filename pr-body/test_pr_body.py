@@ -7,7 +7,7 @@ import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
-from pr_body import HEADINGS, draft, main, parse, problems
+from pr_body import HEADINGS, main, parse, problems, release_post
 
 GOOD = """## What changes for users
 Agents can push call results to Salesforce.
@@ -85,30 +85,30 @@ class Problems(unittest.TestCase):
         self.assertEqual(problems(body), [])
 
 
-class Draft(unittest.TestCase):
-    def test_feature_becomes_an_unpublished_feature_post(self):
-        post = draft(GOOD, 'Integrations')
+class ReleasePost(unittest.TestCase):
+    def test_feature_becomes_a_published_feature_post(self):
+        post = release_post(GOOD, 'Integrations')
         self.assertEqual(post['category'], 'Feature')
         self.assertEqual(post['title'], 'Agents can push call results to Salesforce.')
         self.assertEqual(post['subtitle'], 'Before, only HubSpot was supported.')
         self.assertEqual(post['tags'], 'Integrations')
-        self.assertIs(post['is_published'], False)
+        self.assertIs(post['is_published'], True)
         self.assertIn('<p>Before, only HubSpot was supported.</p>', post['content'])
 
     def test_fix_becomes_bug_fix(self):
-        self.assertEqual(draft(GOOD.replace('release: feature', 'release: fix'), 'API')['category'], 'Bug Fix')
+        self.assertEqual(release_post(GOOD.replace('release: feature', 'release: fix'), 'API')['category'], 'Bug Fix')
 
     def test_none_or_missing_release_makes_no_post(self):
-        self.assertIsNone(draft(GOOD.replace('release: feature', 'release: none'), 'API'))
-        self.assertIsNone(draft(GOOD.replace('<!-- release: feature -->', ''), 'API'))
+        self.assertIsNone(release_post(GOOD.replace('release: feature', 'release: none'), 'API'))
+        self.assertIsNone(release_post(GOOD.replace('<!-- release: feature -->', ''), 'API'))
 
     def test_one_line_section_reuses_the_title_as_subtitle(self):
         body = GOOD.replace('\nBefore, only HubSpot was supported.', '')
-        post = draft(body, 'API')
+        post = release_post(body, 'API')
         self.assertEqual(post['subtitle'], post['title'])
 
     def test_html_in_the_body_is_escaped(self):
-        post = draft(GOOD.replace('Before, only', '<script>x</script> Before, only'), 'API')
+        post = release_post(GOOD.replace('Before, only', '<script>x</script> Before, only'), 'API')
         self.assertNotIn('<script>', post['content'])
 
 
@@ -132,7 +132,7 @@ class FakeServer(BaseHTTPRequestHandler):
         pass
 
 
-class ReleaseDraftFlow(unittest.TestCase):
+class PublishFlow(unittest.TestCase):
     def setUp(self):
         self.srv = HTTPServer(('127.0.0.1', 0), FakeServer)
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()
@@ -168,12 +168,12 @@ class ReleaseDraftFlow(unittest.TestCase):
     def posts(self, path):
         return [body for method, p, body in FakeServer.seen if method == 'POST' and p == path]
 
-    def test_merge_posts_one_draft_and_tells_the_pr(self):
+    def test_merge_publishes_once_and_tells_the_pr(self):
         main(self.env)
         [post] = self.posts('/changelog')
-        self.assertIs(post['is_published'], False)
+        self.assertIs(post['is_published'], True)
         [first] = self.posts('/repos/o/r/issues/7/comments')
-        self.assertIn('<!-- release-draft -->', first['body'])  # the marker lands before the POST
+        self.assertIn('<!-- release-post -->', first['body'])  # the marker lands before the POST
         [(_, final)] = [(p, b) for m, p, b in FakeServer.seen if m == 'PATCH']
         self.assertIn('1200', final['body'])
 
@@ -208,9 +208,9 @@ class ReleaseDraftFlow(unittest.TestCase):
         deletes = [p for method, p, _ in FakeServer.seen if method == 'DELETE']
         self.assertEqual(deletes, ['/repos/o/r/issues/comments/55'])
 
-    def test_rerun_after_a_draft_posts_nothing(self):
+    def test_rerun_after_a_post_posts_nothing(self):
         FakeServer.routes[('GET', '/repos/o/r/issues/7/comments?per_page=100')] = [
-            {'user': {'login': 'github-actions[bot]'}, 'body': '<!-- release-draft -->\nRelease draft 1200'}
+            {'user': {'login': 'github-actions[bot]'}, 'body': '<!-- release-post -->\nPublished as post 1200'}
         ]
         main(self.env)
         self.assertEqual(self.posts('/changelog'), [])
