@@ -7,10 +7,10 @@
 
 <br>
 
-**Create your Free Voice AI Assistant**
+**Build and deploy voice AI agents that make and answer phone calls**
 
 Build an agent from a prompt, give it your tools and knowledge, then put it on a
-phone number, a website, or a bulk campaign.
+phone number, a website, or a call campaign.
 
 [Documentation](https://docs.omnidim.io/docs) &nbsp;·&nbsp;
 [Quickstart](https://docs.omnidim.io/docs/get-started/quickstart) &nbsp;·&nbsp;
